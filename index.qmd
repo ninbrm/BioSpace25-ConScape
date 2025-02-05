@@ -1,14 +1,13 @@
 ---
-title: "Rasters.jl"
-subtitle: "Geospatial raster data reading, writing and manipulation"
+title: "ConScape.jl"
+subtitle: "Landscape connectivity modeling"
 author:
-  - name: Rafael Schouten
+  - name: Bram Van Moorter
     orcid:
-    email: rafaelschouten@gmail.com
+    email: bram.van.moorter@nina.no
     affiliation:
-      - name: Globe Intstitute, Copenhagen University
-      - department: Section for Biodiversity
-date: "2024-07-10"
+      - name: Norwegian Institute for Nature Research, Oslo
+date: "2025-02-10"
 engine: julia
 format:
   revealjs:
@@ -24,22 +23,19 @@ execute:
     echo: true
 ---
 
-# What is a raster?
+# The landscape as a network?
 
 . . .
 
 :::: {.columns}
 
 ::: {.column width="50%"}
-![](https://raw.githubusercontent.com/NEONScience/NEON-Data-Skills/main/graphics/raster-general/raster_concept.png)
+![](https://methodsblog.com/wp-content/uploads/2017/09/fig1.png)
 :::
 
 ::: {.column width="50%"}
-- like an image, but not RGB
-- values of some variable accross a gridded space
-- usually has X/Y spatial dimensions 
-  - (e.g. lattitude/longitude)
-- with a coordinate reference system
+- habitat patches with a size and/or quality
+- connections between patches
 :::
 
 ::::
@@ -49,18 +45,18 @@ execute:
 :::: {.columns}
 
 ::: {.column width="50%"}
-![](https://esd.copernicus.org/articles/11/201/2020/esd-11-201-2020-f03-web.png)
+![](https://conscape.org/notebooks/nbk_getting_started_files/figure-html/cell-11-output-1.svg)
 :::
 
 ::: {.column width="50%"}
-- may be collected in a dataset with multiple variables
-- may have more dimensions, like time
+- continuous landscapes without clear patches
+- pixels are patches
 :::
 
 ::::
 
 
-# DimensionalData.jl integration
+# Terminology
 
 - Rasters extends DimensionalData.jl
   - `Raster <: AbstractDimArray` and `RasterStack <: AbstractDimStack`
