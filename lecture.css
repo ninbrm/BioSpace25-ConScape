@@ -1,0 +1,13 @@
+.v-center-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 90%;
+}
+
+.reveal .slide-logo {
+  height: unset !important;
+  width: unset !important;
+  max-width: 188px !important;
+  max-height: 188px !important;
+}
