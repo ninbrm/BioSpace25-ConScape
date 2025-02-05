@@ -1,0 +1,295 @@
+---
+title: "Rasters.jl"
+subtitle: "Geospatial raster data reading, writing and manipulation"
+author:
+  - name: Rafael Schouten
+    orcid:
+    email: rafaelschouten@gmail.com
+    affiliation:
+      - name: Globe Intstitute, Copenhagen University
+      - department: Section for Biodiversity
+date: "2024-07-10"
+engine: julia
+format:
+  revealjs:
+    theme: [simple, style.scss] # beige blood dark default league moon night serif simple sky solarized
+    incremental: true
+    toc: true
+    toc-depth: 1
+    slide-number: true
+    overview: true
+    code-line-numbers: false
+    highlight-style: ayu
+execute:
+    echo: true
+---
+
+# What is a raster?
+
+. . .
+
+:::: {.columns}
+
+::: {.column width="50%"}
+![](https://raw.githubusercontent.com/NEONScience/NEON-Data-Skills/main/graphics/raster-general/raster_concept.png)
+:::
+
+::: {.column width="50%"}
+- like an image, but not RGB
+- values of some variable accross a gridded space
+- usually has X/Y spatial dimensions 
+  - (e.g. lattitude/longitude)
+- with a coordinate reference system
+:::
+
+::::
+
+---
+
+:::: {.columns}
+
+::: {.column width="50%"}
+![](https://esd.copernicus.org/articles/11/201/2020/esd-11-201-2020-f03-web.png)
+:::
+
+::: {.column width="50%"}
+- may be collected in a dataset with multiple variables
+- may have more dimensions, like time
+:::
+
+::::
+
+
+# DimensionalData.jl integration
+
+- Rasters extends DimensionalData.jl
+  - `Raster <: AbstractDimArray` and `RasterStack <: AbstractDimStack`
+- This gives is the foundation for spatial work
+- Rasters adds:
+  - coordinate reference systems
+  - missing value handling
+  - File IO 
+  - GIS tools
+
+## File Read/Write Backends
+
+File types                      | Package
+------------------------------- | ----------
+Netcdf/hdf5                     | NCDatasets.jl
+Grib (read only)                | GRIBDatasets.jl
+Zarr (PR nearly done!)          | ZarrDatasets.jl
+grd (simple Mmap data from R)   | native
+GeoTIFF and everything else     | ArchGDAL.jl
+
+
+## Backend detection
+
+Backend detected in constructors:
+
+```julia
+# Single array
+rast = Raster("myraster.tif")    # Will use ArchGDAL.jl
+rast = Raster("myraster.nc")     # Will use NCDatasets
+
+# Multi-array
+st = RasterStack("mystack.nc")   # Will use NCDatasets.jl
+st = RasterStack("mystack.grib") # Will use GRIBDatasets.jl
+```
+
+# DiskArrays.jl integration  
+
+For larger-than-memory data
+
+## Lazy loading
+
+```julia
+rast = Raster(filename; lazy=true)
+```
+. . .
+
+Still lazy after broadcasts:
+```julia
+rast10 = rast .* 10
+```
+. . .
+
+Reads from disk/network only on `getindex`:
+```julia
+rast10[X=100 .. 135, Y=20 .. 40]
+```
+
+## Chunk patterns 
+
+For more efficient lazy reads:
+\
+```julia
+write("rechunked.tif", mem_rast; chunks=(X(256), Y(256)))
+```
+
+## RasterDataSources.jl integration
+
+```{julia}
+#| echo: false
+if !haskey(ENV, "RASTERDATASOURCES_PATH")
+    ENV["RASTERDATASOURCES_PATH"] = ".";
+end
+```
+\
+Load a raster from RasterDataSources.jl filename:
+
+```{julia}
+using Rasters, RasterDataSources, ArchGDAL
+bioclim_filename = RasterDataSources.getraster(WorldClim{BioClim}, 5)
+bioclim5 = Raster(bioclim_filename);
+```
+
+. . .
+
+\
+Or use RasterDataSources.jl syntax directly:
+
+```{julia}
+bioclim_filename = Raster(WorldClim{BioClim}, 5);
+```
+
+# Plotting
+
+Always the right way up!
+
+## Plots.jl
+
+```{julia}
+using Plots
+Plots.plot(bioclim5)
+```
+
+## Makie.jl
+
+```{julia}
+#| echo: false
+using CairoMakie
+CairoMakie.activate!(type = "png")
+```
+
+```{julia}
+using CairoMakie
+Makie.plot(bioclim5)
+```
+
+## GeoMakie.jl
+
+```{julia}
+using GeoMakie
+fig = Figure();
+ga = GeoAxis(fig[1, 1]; dest="+proj=ortho +lon_0=19 +lat_0=72")
+Makie.heatmap!(ga, bioclim5)
+fig
+```
+
+
+# Common GIS methods
+- for working with raster data
+- for using vector/geometry data with raster data
+
+## Native rasterization engine
+
+- accepts all GeoInterface.jl geometries
+- extremely fast + threaded
+- detailed correctness warnings
+- consistent behaviour and syntax for:
+
+. . .
+
+::: {.nonincremental}
+  - `rasterize`
+  - `coverage`
+  - `mask`
+  - `boolmask`/`missingmask`
+  - `zonal`
+:::
+
+## Other common methods
+
+::: {.nonincremental}
+- extract
+- crop/extend
+- trim
+- mosaic
+- aggregate
+- resample
+:::
+
+# Examples
+\
+```{julia}
+using Rasters
+using ArchGDAL
+using Dates
+using DataFrames
+using GBIF2
+using NaturalEarth
+using RasterDataSources
+```
+
+```{julia}
+#| echo: false
+using Rasters: trim
+```
+
+## `extract`
+
+Extract climate data at specific points:
+
+```{julia}
+#| output-location: fragment
+clim = RasterStack(WorldClim{BioClim})
+occ = GBIF2.occurrence_search("Burramys parvus")
+# occ is a table with a `:geometry` column, so this "just works"
+extract(clim, occ; name=(:bio1, :bio4, :bio7)) |> DataFrame
+```
+
+## `mask` + `trim`
+
+Mask climate rasters wth country border :
+
+```{julia}
+#| output-location: fragment
+clim = RasterStack(WorldClim{Climate}, (:tmin, :tmax, :prec, :wind); month=July)
+countries = naturalearth("ne_10m_admin_0_countries") |> DataFrame
+finland = subset(countries, :NAME => ByRow(==("Finland"))).geometry
+finland_clim = mask(clim; with=finland) |> trim
+Plots.plot(finland_clim; size=(800, 400))
+```
+
+## `zonal` statistics
+
+```{julia}
+#| echo: false
+using Rasters, RasterDataSources, ArchGDAL, Dates, DataFrames, NaturalEarth, Statistics
+```
+
+Find the hottest and coldest countries in July:
+
+```{julia}
+#| output-location: fragment
+clim = Raster(WorldClim{Climate}, :tmax; month=July)
+countries = naturalearth("ne_10m_admin_0_countries") |> DataFrame
+countries.july_maxtemp = zonal(Statistics.mean, clim; 
+    of=countries, boundary=:touches, progress=false
+)
+filtered = subset(countries, :july_maxtemp => ByRow(!isnan))
+sort!(filtered, :july_maxtemp).NAME
+```
+
+## Thanks
+
+Especially to Rasters.jl contributors!
+
+![](https://contrib.rocks/image?repo=rafaqz/Rasters.jl)
+
+\
+Any problems, make github issues at\
+https://github.com/rafaqz/Rasters.jl
+\
+\
+(Please include all files in a MWE!)
