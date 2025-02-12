@@ -1,0 +1,308 @@
+---
+title: "Landscape Connectivity Modelling with ConScape"
+author:   
+  - Bram Van Moorter   
+  - Raf Schouten
+format: pptx
+---
+
+## ConScape demonstration
+
+::: {.content-hidden}
+Installing packages can be done in the Packages REPL.
+Enter the Pkg REPL by pressing "]" from the Julia REPL. 
+To get back to the Julia REPL, press backspace.
+:::
+
+We install the ConScape library from the "demo" branch:
+
+```
+]
+add ConScape#demo
+```
+
+---
+
+Now we load the relevant libraries:
+
+```{julia}
+#| echo: true
+
+using ConScape, SparseArrays, LinearAlgebra
+using Rasters, ArchGDAL
+using ConScape.LinearSolve
+using CairoMakie
+```
+
+---
+
+### First: habitat quality and permeability
+
+The first step is to load the raster data specifying the graph structure in terms of habitat quality and permeability.
+
+We set the data directory to the ConScape directory with the test data:
+```{julia}
+#| echo: true
+
+datadir = joinpath(dirname(pathof(ConScape)), "..", "data")
+readdir(datadir)
+_tempdir = mkdir(tempname());
+```
+
+---
+
+We load the habitat suitabilty data, note that the way the ascii is read in GDAL is reversed and rotated:
+
+```{julia}
+#| echo: true
+
+qualities = reverse(rotr90(replace_missing(Raster(
+    joinpath(datadir, "hab_qual_200.asc")), NaN)); dims=X)
+Makie.plot(qualities, colormap=cgrad([:lightgrey, :green]))
+```
+
+---
+
+Next we read the habitat permeability:
+```{julia}
+#| echo: true
+
+affinities = reverse(rotr90(replace_missing(Raster(
+    joinpath(datadir, "mov_prob_200.asc")), NaN)); dims=X)
+Makie.plot(qualities, colormap=cgrad(:acton))
+```
+
+---
+
+::: {.callout-important}
+## Very important
+
+Ensure that all the connected nodes have a value for the quality of the habitat.
+:::
+
+```{julia}
+#| echo: true
+
+qualities[(affinities .> 0) .& isnan.(qualities)] .= 1e-20;
+```
+
+## Second: determine path parameters
+
+The second step after parameterizing the graph nodes and edges is to determine the parameters of the paths.
+We first investigate the effect of path randomness, then we study how distance should be converted into proximity.
+
+---
+
+### The effect of path randomness -- theta
+
+To investigate the effect of theta, we will investigate the path distribution between a single pixel as source and one as a target: 
+
+```{julia}
+#| echo: true
+
+source_qualities = copy(qualities)
+source_qualities[:,:] .= 0
+source_qualities[250, 500] = 1
+
+target_qualities = copy(qualities)
+target_qualities[:,:] .= 0
+target_qualities[350, 400] = 1
+
+rast = RasterStack((; affinities, qualities=source_qualities, target_qualities=modify(sparse, target_qualities)))
+```
+
+---
+
+We setup a "problem" to "solve" it -- we loop over different optimality values:
+
+```{julia}
+#| echo: true
+
+graph_measures = (; betw=ConScape.BetweennessQweighted())
+distance_transformation = (nodist=nothing)
+solver = ConScape.MatrixSolver()
+
+θs = [1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+
+betw = map(θs) do θ
+    connectivity_measure = ConScape.ExpectedCost(; θ, distance_transformation)
+    problem = ConScape.Problem(;graph_measures, connectivity_measure, solver)
+    ConScape.solve(problem, rast).betw
+end
+
+betw = cat(betw...; dims=Dim{:theta}(θs))
+```
+
+---
+
+Plot:
+
+```{julia}
+#| echo: true
+
+Rasters.rplot(betw[Y(6.90e6 .. 6.94e6), X(175000 .. 220000)], colormap=cgrad(:magma), width=1500, height=500)
+```
+
+---
+
+### The effect of distance decay -- alpha
+
+We setup a "problem" and "initialize" it to look at the effect of the distance decay: 
+
+```{julia}
+#| echo: true
+
+θ = 0.1
+graph_measures = (; betq=ConScape.BetweennessQweighted())
+distance_transformation = nothing
+connectivity_measure = ConScape.ExpectedCost(; θ, distance_transformation)
+problem = ConScape.Problem(;graph_measures, connectivity_measure, solver)
+workspace = init(problem, rast);
+```
+
+---
+
+The distance towards a target pixel:
+```{julia}
+#| echo: true
+
+dists = ConScape.Raster(workspace.expected_costs[:,1], workspace.grid)
+Makie.plot(dists)
+```
+
+---
+
+We loop over different distance decay values -- alpha:   
+
+```{julia}
+#| echo: true
+
+αs = 1 ./ [1, 100, 250, 500]
+
+proxs = map(αs) do α
+    ConScape.Raster(map(x -> exp(-α*x), workspace.expected_costs[:,1]), workspace.grid)
+end
+proxs = cat(proxs...; dims=Dim{:alpha}(αs))
+```
+
+---
+
+Plot: 
+
+```{julia}
+#| echo: true
+
+Rasters.rplot(proxs[Y(6.90e6 .. 6.94e6), X(175000 .. 220000)], colormap=cgrad(:magma))
+```
+
+## Third: compute graph measures
+
+### Setup landscape network
+
+Parameterize the graph:
+
+```{julia}
+#| echo: true
+
+rast = RasterStack((; affinities, qualities, 
+            target_qualities=ConScape.coarse_graining(qualities, 10)))
+```
+
+---
+
+Parameterize the paths:
+
+```{julia}
+#| echo: true
+
+θ = 0.1
+α = 1/500
+```
+
+---
+
+
+### Compute functional habitat
+
+Setup the problem:
+
+```{julia}
+#| echo: true
+
+graph_measures = (; ch=ConScape.ConnectedHabitat())
+distance_transformation = (expx=t -> exp(-α*t))
+connectivity_measure = ConScape.ExpectedCost(; θ, distance_transformation)
+problem = ConScape.Problem(;graph_measures, connectivity_measure, solver)
+```
+
+---
+
+Solve the problem:
+
+```{julia}
+#| echo: true
+
+workspace = init(problem, rast);
+func = ConScape.solve!(workspace, problem).ch
+```
+
+---
+
+Plot functional habitat -- suitable and well-connected habitat:
+
+```{julia}
+#| echo: true
+
+Makie.plot(func, colormap=cgrad(:viridis))
+```
+
+---
+
+### Compute movement flow or corridors
+
+Setup the problem:
+
+```{julia}
+#| echo: true
+
+graph_measures = (; flow=ConScape.BetweennessKweighted())
+distance_transformation = (expx=t -> exp(-α*t))
+connectivity_measure = ConScape.ExpectedCost(; θ, distance_transformation)
+problem = ConScape.Problem(;graph_measures, connectivity_measure, solver)
+```
+---
+
+Solve the problem:
+
+```{julia}
+#| echo: true
+
+flow = ConScape.solve(problem, rast).flow
+```
+
+---
+
+Plot movement flows -- corridors:
+
+```{julia}
+#| echo: true
+
+Makie.plot(flow, colormap=cgrad(:magma))
+```
+
+---
+
+Enhance contrast:
+
+```{julia}
+#| echo: true
+
+Makie.plot((flow).^(1/1.75), colormap=cgrad(:magma))
+```
+
+```{julia}
+#| echo: false
+
+workspace = nothing
+```
+
